@@ -245,6 +245,43 @@
             background-color: #6D4C41;
         }
         
+        /* Power-up indicators */
+        #powerUpIndicators {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin: 10px 0;
+            flex-wrap: wrap;
+        }
+        
+        .power-up-indicator {
+            display: flex;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 20px;
+            padding: 5px 10px;
+            font-size: 0.8em;
+            font-weight: bold;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .power-up-icon {
+            width: 20px;
+            height: 20px;
+            margin-right: 5px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+        }
+        
+        .speed-icon { background-color: #4FC3F7; color: white; }
+        .slow-icon { background-color: #FF9800; color: white; }
+        .ghost-icon { background-color: #9C27B0; color: white; }
+        .double-icon { background-color: #4CAF50; color: white; }
+        .magnet-icon { background-color: #F44336; color: white; }
+        
         /* Mobile-specific adjustments */
         @media (max-width: 480px) {
             .game-btn-action, .mute-btn {
@@ -266,11 +303,27 @@
                 padding: 10px 5px;
                 font-size: 0.7em;
             }
+            
+            .power-up-indicator {
+                font-size: 0.7em;
+                padding: 3px 8px;
+            }
         }
         
         /* Snake sprite styling */
         .snake-sprite {
             display: none;
+        }
+        
+        /* Power-up animations */
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+            100% { transform: scale(1); }
+        }
+        
+        .pulsing {
+            animation: pulse 0.5s infinite;
         }
     </style>
 </head>
@@ -294,6 +347,10 @@
     </div>
     
     <canvas id="gameCanvas" width="450" height="450"></canvas>
+    
+    <div id="powerUpIndicators">
+        <!-- Power-up indicators will be added here dynamically -->
+    </div>
    
     <div id="controls">
         <div id="gameControlsRow">
@@ -336,10 +393,13 @@
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
         const gridSize = 15;
-        const gameSpeed = 150;
+        let baseGameSpeed = 150;
+        let gameSpeed = baseGameSpeed;
         const MAX_FRUITS = 5;
+        const MAX_POWERUPS = 2;
         let snake = [];
         let fruits = [];
+        let powerUps = [];
         let dx = 0;
         let dy = 0;
         let score = 0;
@@ -350,6 +410,90 @@
         let isMuted = false;
         const backgroundMusic = document.getElementById('backgroundMusic');
         const snakeSprite = document.getElementById('snakeSprite');
+        
+        // Power-up types and effects
+        const POWERUP_TYPES = {
+            SPEED_BOOST: {
+                name: "Speed Boost",
+                color: "#4FC3F7",
+                icon: "⚡",
+                duration: 10000, // 10 seconds
+                effect: () => {
+                    gameSpeed = baseGameSpeed / 2; // Double speed
+                    if (gameInterval) {
+                        clearInterval(gameInterval);
+                        gameInterval = setInterval(gameLoop, gameSpeed);
+                    }
+                },
+                reset: () => {
+                    gameSpeed = baseGameSpeed;
+                    if (gameInterval) {
+                        clearInterval(gameInterval);
+                        gameInterval = setInterval(gameLoop, gameSpeed);
+                    }
+                }
+            },
+            SLOW_MOTION: {
+                name: "Slow Motion",
+                color: "#FF9800",
+                icon: "🐌",
+                duration: 8000, // 8 seconds
+                effect: () => {
+                    gameSpeed = baseGameSpeed * 2; // Half speed
+                    if (gameInterval) {
+                        clearInterval(gameInterval);
+                        gameInterval = setInterval(gameLoop, gameSpeed);
+                    }
+                },
+                reset: () => {
+                    gameSpeed = baseGameSpeed;
+                    if (gameInterval) {
+                        clearInterval(gameInterval);
+                        gameInterval = setInterval(gameLoop, gameSpeed);
+                    }
+                }
+            },
+            GHOST_MODE: {
+                name: "Ghost Mode",
+                color: "#9C27B0",
+                icon: "👻",
+                duration: 12000, // 12 seconds
+                effect: () => {
+                    // Ghost mode allows passing through walls
+                    // This is handled in the collision detection
+                },
+                reset: () => {
+                    // No special reset needed
+                }
+            },
+            DOUBLE_POINTS: {
+                name: "Double Points",
+                color: "#4CAF50",
+                icon: "2×",
+                duration: 15000, // 15 seconds
+                effect: () => {
+                    // Double points is handled when scoring
+                },
+                reset: () => {
+                    // No special reset needed
+                }
+            },
+            FRUIT_MAGNET: {
+                name: "Fruit Magnet",
+                color: "#F44336",
+                icon: "🧲",
+                duration: 10000, // 10 seconds
+                effect: () => {
+                    // Fruit magnet is handled in the game loop
+                },
+                reset: () => {
+                    // No special reset needed
+                }
+            }
+        };
+        
+        // Active power-ups
+        let activePowerUps = {};
         
         // Stage configurations
         const stages = [
@@ -448,13 +592,17 @@
             dy = 0;
             score = 0;
             fruits = [];
+            powerUps = [];
+            activePowerUps = {};
             ateFruit = false;
+            gameSpeed = baseGameSpeed;
             document.getElementById('currentScoreDisplay').innerText = 'Score: 0';
             highScore = localStorage.getItem('snakeHighScore') || 0;
             document.getElementById('highScoreDisplay').innerText = 'High Score: ' + highScore;
             for (let i = 0; i < 3; i++) {
                 generateFruit();
             }
+            updatePowerUpIndicators();
             draw();
             
             // Reset button states
@@ -488,6 +636,42 @@
                 generateFruit();
             }
         }
+        
+        function generatePowerUp() {
+            // Only generate power-ups if we have less than the max and randomly
+            if (powerUps.length >= MAX_POWERUPS || Math.random() > 0.02) return;
+            
+            const powerUpTypes = Object.keys(POWERUP_TYPES);
+            const randomType = powerUpTypes[Math.floor(Math.random() * powerUpTypes.length)];
+            
+            const newPowerUp = {
+                x: Math.floor(Math.random() * (canvas.width / gridSize)),
+                y: Math.floor(Math.random() * (canvas.height / gridSize)),
+                type: randomType,
+                color: POWERUP_TYPES[randomType].color,
+                icon: POWERUP_TYPES[randomType].icon
+            };
+            
+            // Make sure power-up doesn't spawn on snake or fruit
+            let invalidPosition = false;
+            for (let segment of snake) {
+                if (segment.x === newPowerUp.x && segment.y === newPowerUp.y) {
+                    invalidPosition = true;
+                    break;
+                }
+            }
+            
+            for (let fruit of fruits) {
+                if (fruit.x === newPowerUp.x && fruit.y === newPowerUp.y) {
+                    invalidPosition = true;
+                    break;
+                }
+            }
+            
+            if (!invalidPosition) {
+                powerUps.push(newPowerUp);
+            }
+        }
 
         function draw() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -510,12 +694,58 @@
                 const offset = (gridSize - fruit.size) / 2;
                 ctx.fillRect(fruit.x * gridSize + offset, fruit.y * gridSize + offset, fruit.size, fruit.size);
             });
+            
+            // Draw power-ups
+            powerUps.forEach(powerUp => {
+                ctx.fillStyle = powerUp.color;
+                ctx.beginPath();
+                ctx.arc(
+                    powerUp.x * gridSize + gridSize/2, 
+                    powerUp.y * gridSize + gridSize/2, 
+                    gridSize/2 - 1, 
+                    0, 
+                    Math.PI * 2
+                );
+                ctx.fill();
+                
+                // Draw icon
+                ctx.fillStyle = "white";
+                ctx.font = "10px Arial";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(
+                    powerUp.icon, 
+                    powerUp.x * gridSize + gridSize/2, 
+                    powerUp.y * gridSize + gridSize/2
+                );
+            });
         }
         
         function getSnakeBodyColor() {
             // Return different colors based on stage for variety
             const stageColors = ['#6E9A3C', '#8B4513', '#2E8B57', '#CD853F', '#4a6572'];
             return stageColors[currentStage];
+        }
+        
+        function updatePowerUpIndicators() {
+            const container = document.getElementById('powerUpIndicators');
+            container.innerHTML = '';
+            
+            Object.keys(activePowerUps).forEach(powerUpType => {
+                const powerUp = activePowerUps[powerUpType];
+                const timeLeft = Math.ceil((powerUp.endTime - Date.now()) / 1000);
+                
+                const indicator = document.createElement('div');
+                indicator.className = 'power-up-indicator';
+                indicator.innerHTML = `
+                    <div class="power-up-icon ${powerUpType.toLowerCase().replace('_', '-')}-icon">
+                        ${POWERUP_TYPES[powerUpType].icon}
+                    </div>
+                    ${timeLeft}s
+                `;
+                
+                container.appendChild(indicator);
+            });
         }
 
         // Move the snake and check for collisions
@@ -531,7 +761,9 @@
             for (let i = 0; i < fruits.length; i++) {
                 if (newHead.x === fruits[i].x && newHead.y === fruits[i].y) {
                     ateFruit = true;
-                    score++;
+                    // Check for double points power-up
+                    const pointsMultiplier = activePowerUps.DOUBLE_POINTS ? 2 : 1;
+                    score += pointsMultiplier;
                     document.getElementById('currentScoreDisplay').innerText = 'Score: ' + score;
                     fruits.splice(i, 1);
                     if (fruits.length < MAX_FRUITS) {
@@ -540,20 +772,84 @@
                     break;
                 }
             }
+            
+            // Check for power-up collisions
+            for (let i = 0; i < powerUps.length; i++) {
+                if (newHead.x === powerUps[i].x && newHead.y === powerUps[i].y) {
+                    activatePowerUp(powerUps[i].type);
+                    powerUps.splice(i, 1);
+                    break;
+                }
+            }
+            
+            // Fruit magnet effect - attract nearby fruits
+            if (activePowerUps.FRUIT_MAGNET) {
+                const magnetRange = 5; // Grid cells
+                fruits.forEach((fruit, index) => {
+                    const distance = Math.sqrt(
+                        Math.pow(fruit.x - newHead.x, 2) + 
+                        Math.pow(fruit.y - newHead.y, 2)
+                    );
+                    
+                    if (distance <= magnetRange && distance > 0) {
+                        // Move fruit one step closer to snake
+                        if (fruit.x < newHead.x) fruit.x += 1;
+                        else if (fruit.x > newHead.x) fruit.x -= 1;
+                        
+                        if (fruit.y < newHead.y) fruit.y += 1;
+                        else if (fruit.y > newHead.y) fruit.y -= 1;
+                    }
+                });
+            }
 
             // Only remove the tail if we didn't eat a fruit
             if (!ateFruit) {
                 snake.pop();
             }
         }
+        
+        function activatePowerUp(powerUpType) {
+            const powerUp = POWERUP_TYPES[powerUpType];
+            
+            // If this power-up is already active, reset it first
+            if (activePowerUps[powerUpType]) {
+                clearTimeout(activePowerUps[powerUpType].timeout);
+                powerUp.reset();
+            }
+            
+            // Apply the power-up effect
+            powerUp.effect();
+            
+            // Set up the power-up duration
+            const endTime = Date.now() + powerUp.duration;
+            activePowerUps[powerUpType] = {
+                endTime: endTime,
+                timeout: setTimeout(() => {
+                    powerUp.reset();
+                    delete activePowerUps[powerUpType];
+                    updatePowerUpIndicators();
+                }, powerUp.duration)
+            };
+            
+            updatePowerUpIndicators();
+        }
 
         // Check for game over
         function checkGameOver() {
             const head = snake[0];
             
-            // Check wall collision
-            if (head.x < 0 || head.x >= canvas.width / gridSize || head.y < 0 || head.y >= canvas.height / gridSize) {
-                return true;
+            // Check wall collision (unless in ghost mode)
+            if (!activePowerUps.GHOST_MODE) {
+                if (head.x < 0 || head.x >= canvas.width / gridSize || head.y < 0 || head.y >= canvas.height / gridSize) {
+                    return true;
+                }
+            } else {
+                // Ghost mode - wrap around edges
+                if (head.x < 0) head.x = canvas.width / gridSize - 1;
+                else if (head.x >= canvas.width / gridSize) head.x = 0;
+                
+                if (head.y < 0) head.y = canvas.height / gridSize - 1;
+                else if (head.y >= canvas.height / gridSize) head.y = 0;
             }
             
             // Check self collision (skip the head)
@@ -586,6 +882,12 @@
                 return;
             }
             
+            // Generate power-ups randomly
+            generatePowerUp();
+            
+            // Update power-up indicators
+            updatePowerUpIndicators();
+            
             moveSnake();
             draw();
         }
@@ -611,6 +913,10 @@
         // Restart button handler
         function restartGame() {
             clearInterval(gameInterval);
+            // Clear any active power-up timeouts
+            Object.keys(activePowerUps).forEach(powerUpType => {
+                clearTimeout(activePowerUps[powerUpType].timeout);
+            });
             gameRunning = false;
             initializeGame();
         }
